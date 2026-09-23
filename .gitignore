@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+# Secrets and runtime state
+credentials.json
+token.json
+state.json
+*.log
+build/
+dist/
+.venv-build/
+.DS_Store
