@@ -1,15 +1,25 @@
 # ctc-agent
 
-A Mac app that watches a Gmail inbox while it's open. Whenever a new email arrives whose
-subject starts with `[CTC]`, it replies in the same thread with the body `ctc email ack`, and
-shows each action in its window. Closing the window (or ⌘Q) stops the agent.
+A Mac app that watches a Gmail inbox while it's open. Claude (model `claude-haiku-4-5`) reads
+each new email and decides whether the sender wants to know more about CTC. If so, the app
+replies in the same thread with a short, friendly note (English and Chinese) pointing to
+https://www.cedartc.org. The window lists every reply and every email it decided not to
+answer. Closing the window (or ⌘Q) stops the agent.
 
 - **Only new mail**: emails received before the agent first started are ignored. Mail that
   arrives while the app is closed is handled the next time it's opened.
-- **No duplicate replies**: each acknowledged email gets the Gmail label `ctc-acked` and is
-  skipped afterwards.
-- **Exact match**: the subject must start with `[CTC]` (case-sensitive). Replies such as
-  `Re: [CTC] ...` don't match, so the agent never answers its own acks.
+- **Each email is checked once**: every email the agent reads gets a hidden Gmail label
+  `ctc-checked`, and every email it answers also gets the visible label `ctc-acked`. Labeled
+  emails are skipped afterwards, so no email is sent to Claude or answered twice.
+- **No loops or intrusions**: without asking Claude, the agent skips auto-replies, mailing
+  lists, bulk mail, your own messages, and any thread you (or the agent) have already
+  replied to. Its replies carry `Auto-Submitted: auto-replied`, so other auto-responders
+  don't answer them.
+- **Fixed reply text**: Claude only decides *whether* to reply. The reply text is the fixed
+  `REPLY_BODY` template in [ctc_agent.py](ctc_agent.py), so an email can't make the agent
+  write anything else. The classifier prompt (`CLASSIFIER_PROMPT`) is in the same file.
+- **Cost**: one short Claude Haiku request per new email (typically about $0.001, at most about $0.01). Emails
+  longer than 8,000 characters are truncated first.
 - **Resilient**: polls every 30s and backs off exponentially (up to 10 min) on errors. If the
   Gmail sign-in expires or is revoked, the window says so and offers **Sign In** again.
 
@@ -19,10 +29,14 @@ shows each action in its window. Closing the window (or ⌘Q) stops the agent.
 2. Open **CTC Agent** from Applications. The first time, macOS may say it can't verify the
    developer (unless the build was signed and notarized). If so, open **System Settings →
    Privacy & Security**, click **Open Anyway** next to CTC Agent, and confirm.
-3. Click **Sign In**, then sign in to the Gmail account to watch and allow access in the
+3. When asked, paste a Claude API key (create one at
+   [console.anthropic.com](https://console.anthropic.com/)). You can change it later from
+   **CTC Agent → Set Claude API Key…**. It's saved in
+   `~/Library/Application Support/ctc-agent/anthropic_api_key`.
+4. Click **Sign In**, then sign in to the Gmail account to watch and allow access in the
    browser. (If Google says the app is unverified, click **Advanced → Go to … (unsafe)**.)
-4. The window shows **Watching you@gmail.com**. Every reply the agent sends appears in the
-   activity list along with any errors. Keep the window open (it can be minimized) for the
+5. The window shows **Watching you@gmail.com**. Every reply the agent sends, every email it
+   decided not to answer, and any errors appear in the activity list. Keep the window open (it can be minimized) for the
    agent to keep working. Close it to stop.
 
 Next time, just open CTC Agent: it remembers the sign-in. Use **Sign Out** to switch accounts.
@@ -76,7 +90,8 @@ Send the DMG to users. The user's Mac doesn't need Python.
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 .venv/bin/python -m unittest -v
-.venv/bin/python ctc_agent.py app       # open the app window from source
+.venv/bin/python ctc_agent.py set-api-key   # or export ANTHROPIC_API_KEY
+.venv/bin/python ctc_agent.py app           # open the app window from source
 ```
 
 The UI is native AppKit via PyObjC ([gui.py](gui.py)). The agent runs on a worker thread

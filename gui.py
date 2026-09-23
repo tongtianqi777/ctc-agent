@@ -17,9 +17,9 @@ from typing import Optional
 
 import objc
 from AppKit import (
-    NSApp, NSApplication, NSApplicationActivationPolicyRegular, NSBackingStoreBuffered,
-    NSBezelBorder, NSButton, NSColor, NSFont, NSLineBreakByTruncatingTail, NSMakeRect, NSMenu,
-    NSMenuItem, NSScrollView, NSTableColumn, NSTableView,
+    NSAlert, NSAlertFirstButtonReturn, NSApp, NSApplication, NSApplicationActivationPolicyRegular,
+    NSBackingStoreBuffered, NSBezelBorder, NSButton, NSColor, NSFont, NSLineBreakByTruncatingTail, NSMakeRect, NSMenu,
+    NSMenuItem, NSScrollView, NSSecureTextField, NSTableColumn, NSTableView,
     NSTableViewLastColumnOnlyAutoresizingStyle, NSTextField, NSViewHeightSizable,
     NSViewMinXMargin, NSViewMinYMargin, NSViewWidthSizable, NSWindow,
     NSWindowStyleMaskClosable, NSWindowStyleMaskMiniaturizable, NSWindowStyleMaskResizable,
@@ -29,8 +29,8 @@ from Foundation import NSActivityUserInitiatedAllowingIdleSystemSleep, NSObject,
 from google.auth.exceptions import RefreshError
 from PyObjCTools import AppHelper
 
-from ctc_agent import SUBJECT_PREFIX, CtcAgent, NeedsAuth, gmail_service, load_credentials, \
-    load_since_epoch
+from ctc_agent import CtcAgent, NeedsApiKey, NeedsAuth, gmail_service, load_credentials, \
+    load_since_epoch, make_classifier, save_api_key
 
 log = logging.getLogger("ctc_agent.gui")
 
@@ -83,7 +83,7 @@ class AppDelegate(NSObject):
         self._build_window()
         # Without this, App Nap throttles the polling thread whenever the window is hidden.
         self.activity = NSProcessInfo.processInfo().beginActivityWithOptions_reason_(
-            NSActivityUserInitiatedAllowingIdleSystemSleep, "Watching Gmail for [CTC] emails")
+            NSActivityUserInitiatedAllowingIdleSystemSleep, "Watching Gmail for emails about CTC")
         if remove_legacy_service():
             self._add_row("Updated", "Removed the background service from the previous version")
         self._set_state("connecting")
@@ -107,6 +107,10 @@ class AppDelegate(NSObject):
         app_item = NSMenuItem.alloc().init()
         menubar.addItem_(app_item)
         app_menu = NSMenu.alloc().init()
+        key_item = app_menu.addItemWithTitle_action_keyEquivalent_(
+            "Set Claude API Key…", "setApiKey:", "")
+        key_item.setTarget_(self)
+        app_menu.addItem_(NSMenuItem.separatorItem())
         app_menu.addItemWithTitle_action_keyEquivalent_("Quit CTC Agent", "terminate:", "q")
         app_item.setSubmenu_(app_menu)
         NSApp.setMainMenu_(menubar)
@@ -183,6 +187,8 @@ class AppDelegate(NSObject):
             "connecting": ("Connecting to Gmail…", NSColor.systemOrangeColor(), "Sign Out", False),
             "watching": (f"Watching {email}", NSColor.systemGreenColor(), "Sign Out", True),
             "retrying": ("Connection problem", NSColor.systemOrangeColor(), "Sign Out", True),
+            "needs-key": ("Claude API key needed", NSColor.systemOrangeColor(),
+                          "Set API Key…", True),
         }[state]
         self.dot.setStringValue_("●")
         self.dot.setTextColor_(color)
@@ -191,8 +197,32 @@ class AppDelegate(NSObject):
         self.button.setTitle_(button)
         self.button.setEnabled_(enabled)
 
+    def setApiKey_(self, _):
+        alert = NSAlert.alloc().init()
+        alert.setMessageText_("Claude API Key")
+        alert.setInformativeText_("CTC Agent uses Claude to decide which emails are asking "
+                                  "about CTC. Paste an API key from console.anthropic.com.")
+        alert.addButtonWithTitle_("Save")
+        alert.addButtonWithTitle_("Cancel")
+        field = NSSecureTextField.alloc().initWithFrame_(NSMakeRect(0, 0, 300, 24))
+        alert.setAccessoryView_(field)
+        alert.window().setInitialFirstResponder_(field)
+        if alert.runModal() != NSAlertFirstButtonReturn:
+            return
+        key = field.stringValue().strip()
+        if not key:
+            return
+        save_api_key(key)
+        self._add_row("API key", "Saved the Claude API key")
+        if self.state not in ("signed-out", "signing-in"):
+            self._stop_agent()
+            self._set_state("connecting")
+            self._start(interactive=False)
+
     def buttonClicked_(self, _):
-        if self.state == "signed-out":
+        if self.state == "needs-key":
+            self.setApiKey_(None)
+        elif self.state == "signed-out":
             self._set_state("signing-in", "Sign in with the Gmail account CTC Agent should watch.")
             self._add_row("Sign-in", "Opened Google sign-in in your browser")
             self._start(interactive=True)
@@ -232,6 +262,7 @@ class AppDelegate(NSObject):
     def _work(self, gen, interactive):
         a = self.args
         try:
+            classifier = make_classifier()
             creds = load_credentials(a.token, a.credentials, interactive=interactive)
             service = gmail_service(creds)
             email = service.users().getProfile(userId="me").execute()["emailAddress"]
@@ -240,11 +271,13 @@ class AppDelegate(NSObject):
                 previous.join()  # a stopped agent may still be finishing a poll
             if gen != self.generation:
                 return
-            agent = CtcAgent(service, load_since_epoch(a.state), a.interval,
+            agent = CtcAgent(service, load_since_epoch(a.state), classifier, a.interval,
                              listener=lambda event, **d: self._post(gen, self._on_event, event, d))
             self.agent, self.agent_thread = agent, threading.current_thread()
             self._post(gen, self._on_started, email)
             agent.run()
+        except NeedsApiKey as e:
+            self._post(gen, self._on_needs_api_key, str(e))
         except (NeedsAuth, RefreshError) as e:
             self._post(gen, self._on_needs_auth, str(e), interactive)
         except Exception as e:
@@ -256,7 +289,7 @@ class AppDelegate(NSObject):
     @objc.python_method
     def _on_started(self, email):
         self.email = email
-        self._add_row("Started", f"Watching {email} for emails starting with {SUBJECT_PREFIX}")
+        self._add_row("Started", f"Watching {email} for emails asking about CTC")
         self._set_state("watching", "Checking for new emails…", email=email)
 
     @objc.python_method
@@ -265,6 +298,9 @@ class AppDelegate(NSObject):
             self.acked_count += 1
             name, addr = parseaddr(d["sender"])
             self._add_row("Replied", f"{d['subject']}  —  to {name or addr}")
+        elif event == "ignored":
+            name, addr = parseaddr(d["sender"])
+            self._add_row("No reply", f"{d['subject']}  —  from {name or addr} ({d['reason']})")
         elif event == "checked":
             self._set_state("watching", f"Last checked {time.strftime('%H:%M:%S')}  ·  "
                             f"{self.acked_count} replied since opening", email=self.email)
@@ -281,6 +317,12 @@ class AppDelegate(NSObject):
         elif interactive:
             self._add_row("Sign-in failed", message)
         self._set_state("signed-out", "Sign in with the Gmail account to watch.")
+
+    @objc.python_method
+    def _on_needs_api_key(self, message):
+        self.agent = None
+        self._add_row("API key", message)
+        self._set_state("needs-key", "Add a Claude API key so the agent can read new emails.")
 
     @objc.python_method
     def _on_failed(self, message):
