@@ -1,5 +1,6 @@
 import base64
 import email
+import email.policy
 import logging
 import tempfile
 import unittest
@@ -11,23 +12,54 @@ from google.auth.exceptions import RefreshError
 
 logging.disable(logging.CRITICAL)
 
-from ctc_agent import (ACK_BODY, CtcAgent, NeedsAuth, build_reply, is_ctc_subject,
-                       load_credentials)
+import anthropic
+
+from ctc_agent import (CtcAgent, NeedsApiKey, NeedsAuth, automated_reason, build_reply,
+                       load_credentials, message_text)
 
 
-def fake_service(messages, labels=()):
-    """A MagicMock Gmail service whose search returns `messages` (id -> headers dict)."""
+def b64(text):
+    return base64.urlsafe_b64encode(text.encode()).decode()
+
+
+def fake_service(messages, labels=(), answered_threads=()):
+    """A MagicMock Gmail service whose search returns `messages` (id -> headers dict).
+
+    A message's body is its "Body" header value; threads in `answered_threads` contain a SENT message.
+    """
     service = MagicMock()
     msgs = service.users.return_value.messages.return_value
     msgs.list.return_value.execute.return_value = {"messages": [{"id": i} for i in messages]}
-    msgs.get.side_effect = lambda userId, id, **_: MagicMock(execute=lambda: {
-        "id": id, "threadId": f"t-{id}",
-        "payload": {"headers": [{"name": k, "value": v} for k, v in messages[id].items()]},
-    })
+
+    def get(userId, id, **_):
+        headers = dict(messages[id])
+        body = headers.pop("Body", "")
+        return MagicMock(execute=lambda: {
+            "id": id, "threadId": f"t-{id}",
+            "payload": {"mimeType": "text/plain", "body": {"data": b64(body)},
+                        "headers": [{"name": k, "value": v} for k, v in headers.items()]},
+        })
+
+    msgs.get.side_effect = get
+    service.users.return_value.threads.return_value.get.side_effect = \
+        lambda userId, id, **_: MagicMock(execute=lambda: {"messages": [
+            {"labelIds": ["SENT"] if id in answered_threads else ["INBOX"]}]})
     lbls = service.users.return_value.labels.return_value
     lbls.list.return_value.execute.return_value = {"labels": list(labels)}
-    lbls.create.return_value.execute.return_value = {"id": "Label_new"}
+    lbls.create.side_effect = lambda userId, body: MagicMock(
+        execute=lambda: {"id": f"Label_{body['name']}"})
     return service, msgs
+
+
+class FakeClassifier:
+    """Says an email asks about CTC when its body contains "about CTC"."""
+
+    def __init__(self):
+        self.calls = []
+
+    def wants_ctc_info(self, sender, subject, body):
+        self.calls.append(subject)
+        return "about CTC" in body
 
 
 def sent_emails(msgs):
@@ -38,14 +70,33 @@ def sent_emails(msgs):
     return out
 
 
-class SubjectTest(unittest.TestCase):
-    def test_prefix(self):
-        self.assertTrue(is_ctc_subject("[CTC] quarterly report"))
-        self.assertTrue(is_ctc_subject("  [CTC]x"))
-        self.assertFalse(is_ctc_subject("Re: [CTC] quarterly report"))
-        self.assertFalse(is_ctc_subject("CTC update"))
-        self.assertFalse(is_ctc_subject("[ctc] lowercase"))
-        self.assertFalse(is_ctc_subject(""))
+class AutomatedReasonTest(unittest.TestCase):
+    def test_detects_machine_and_bulk_mail(self):
+        self.assertIsNone(automated_reason({"from": "a@x.com"}))
+        self.assertIsNone(automated_reason({"auto-submitted": "no"}))
+        self.assertEqual(automated_reason({"auto-submitted": "auto-replied"}), "automated message")
+        self.assertEqual(automated_reason({"precedence": "Bulk"}), "bulk mail")
+        self.assertEqual(automated_reason({"list-unsubscribe": "<mailto:u@x>"}), "mailing list")
+
+
+class MessageTextTest(unittest.TestCase):
+    def test_prefers_plain_text(self):
+        payload = {"mimeType": "multipart/alternative", "parts": [
+            {"mimeType": "text/html", "body": {"data": b64("<p>html</p>")}},
+            {"mimeType": "text/plain", "body": {"data": b64("plain")}},
+        ]}
+        self.assertEqual(message_text(payload), "plain")
+
+    def test_strips_html(self):
+        html = "<style>p{}</style><p>Tell me&nbsp;about <b>CTC</b></p>"
+        payload = {"mimeType": "text/html", "body": {"data": b64(html)}}
+        self.assertEqual(message_text(payload), "Tell me about CTC")
+
+    def test_decodes_charset(self):
+        payload = {"mimeType": "text/plain", "headers": [
+            {"name": "Content-Type", "value": 'text/plain; charset="big5"'}],
+            "body": {"data": base64.urlsafe_b64encode("香柏木".encode("big5")).decode()}}
+        self.assertEqual(message_text(payload), "香柏木")
 
 
 class BuildReplyTest(unittest.TestCase):
@@ -58,7 +109,11 @@ class BuildReplyTest(unittest.TestCase):
         self.assertEqual(msg["Subject"], "Re: [CTC] hi")
         self.assertEqual(msg["In-Reply-To"], "<m2@x>")
         self.assertEqual(msg["References"], "<m1@x> <m2@x>")
-        self.assertEqual(msg.get_payload().strip(), ACK_BODY)
+        self.assertEqual(msg["Auto-Submitted"], "auto-replied")
+        text = email.message_from_bytes(base64.urlsafe_b64decode(body["raw"]),
+                                        policy=email.policy.default).get_content()
+        self.assertTrue(text.startswith("Hi Ann,"))
+        self.assertIn("https://www.cedartc.org", text)
 
     def test_prefers_reply_to(self):
         body = build_reply({"subject": "[CTC] hi", "from": "a@x.com", "reply-to": "list@x.com"}, "t")
@@ -68,39 +123,72 @@ class BuildReplyTest(unittest.TestCase):
 
 
 class AgentTest(unittest.TestCase):
-    def test_acks_only_ctc_messages_and_labels_them(self):
+    def test_replies_only_to_ctc_inquiries_and_labels_everything(self):
         service, msgs = fake_service({
-            "a": {"Subject": "[CTC] one", "From": "a@x.com", "Message-ID": "<a@x>"},
-            "b": {"Subject": "About CTC", "From": "b@x.com"},
-            "c": {"Subject": "Re: [CTC] one", "From": "c@x.com"},
+            "a": {"Subject": "Question", "From": "a@x.com", "Message-ID": "<a@x>",
+                  "Body": "Can you tell me about CTC?"},
+            "b": {"Subject": "Lunch", "From": "b@x.com", "Body": "Lunch on Friday?"},
         })
-        agent = CtcAgent(service, since_epoch=100)
+        classifier = FakeClassifier()
+        agent = CtcAgent(service, 100, classifier)
         self.assertEqual(agent.poll_once(), 1)
 
         query = msgs.list.call_args.kwargs["q"]
-        self.assertIn("-label:ctc-acked", query)
-        self.assertIn("after:100", query)
+        for part in ("in:inbox", "-from:me", "-label:ctc-acked", "-label:ctc-checked", "after:100"):
+            self.assertIn(part, query)
         [(sent, thread)] = sent_emails(msgs)
         self.assertEqual(thread, "t-a")
         self.assertEqual(sent["To"], "a@x.com")
-        msgs.modify.assert_called_once_with(userId="me", id="a", body={"addLabelIds": ["Label_new"]})
+        self.assertEqual(msgs.modify.call_args_list, [
+            mock.call(userId="me", id="a",
+                      body={"addLabelIds": ["Label_ctc-checked", "Label_ctc-acked"]}),
+            mock.call(userId="me", id="b", body={"addLabelIds": ["Label_ctc-checked"]}),
+        ])
+        create = service.users.return_value.labels.return_value.create
+        created = {c.kwargs["body"]["name"]: c.kwargs["body"] for c in create.call_args_list}
+        self.assertEqual(created["ctc-checked"]["messageListVisibility"], "hide")
+        self.assertEqual(created["ctc-acked"]["messageListVisibility"], "show")
 
-    def test_reuses_existing_label_and_never_double_acks(self):
+    def test_skips_automated_mail_and_answered_threads_without_asking_claude(self):
+        service, msgs = fake_service({
+            "a": {"Subject": "News", "From": "n@x.com", "List-Id": "<news.x.com>",
+                  "Body": "All about CTC"},
+            "b": {"Subject": "Re: hi", "From": "b@x.com", "Body": "more about CTC"},
+            "c": {"Subject": "Out of office", "From": "c@x.com", "Auto-Submitted": "auto-replied",
+                  "Body": "about CTC"},
+            "d": {"Subject": "No sender", "Body": "about CTC"},
+        }, answered_threads={"t-b"})
+        classifier = FakeClassifier()
+        self.assertEqual(CtcAgent(service, 0, classifier).poll_once(), 0)
+        self.assertEqual(classifier.calls, [])
+        msgs.send.assert_not_called()
+        self.assertEqual(msgs.modify.call_count, 4)
+
+    def test_reuses_existing_labels_and_never_double_replies(self):
         service, msgs = fake_service(
-            {"a": {"Subject": "[CTC] one", "From": "a@x.com"}},
-            labels=[{"id": "Label_7", "name": "ctc-acked"}],
+            {"a": {"Subject": "Hi", "From": "a@x.com", "Body": "about CTC"}},
+            labels=[{"id": "Label_7", "name": "ctc-acked"}, {"id": "Label_8", "name": "ctc-checked"}],
         )
-        agent = CtcAgent(service, since_epoch=0)
+        agent = CtcAgent(service, 0, FakeClassifier())
         agent.poll_once()
         agent.poll_once()  # search still returns "a" (e.g. label not yet indexed)
         self.assertEqual(msgs.send.call_count, 1)
         service.users.return_value.labels.return_value.create.assert_not_called()
-        msgs.modify.assert_called_once_with(userId="me", id="a", body={"addLabelIds": ["Label_7"]})
+        msgs.modify.assert_called_once_with(
+            userId="me", id="a", body={"addLabelIds": ["Label_8", "Label_7"]})
+
+    def test_classifier_failure_leaves_message_for_next_poll(self):
+        service, msgs = fake_service({"a": {"Subject": "Hi", "From": "a@x.com"}})
+        classifier = MagicMock()
+        classifier.wants_ctc_info.side_effect = RuntimeError("overloaded")
+        with self.assertRaises(RuntimeError):
+            CtcAgent(service, 0, classifier).poll_once()
+        msgs.modify.assert_not_called()
 
     def test_run_backs_off_on_errors_and_stops(self):
         service, msgs = fake_service({})
         msgs.list.return_value.execute.side_effect = RuntimeError("network down")
-        agent = CtcAgent(service, since_epoch=0, poll_interval=5)
+        agent = CtcAgent(service, 0, FakeClassifier(), poll_interval=5)
         delays = []
 
         def fake_sleep(seconds):
@@ -113,13 +201,16 @@ class AgentTest(unittest.TestCase):
         self.assertEqual(delays, [10, 20, 40])
 
     def test_reports_actions_to_listener(self):
-        service, msgs = fake_service({"a": {"Subject": "[CTC] one", "From": "Ann <a@x.com>"}})
+        service, msgs = fake_service({
+            "a": {"Subject": "Hi", "From": "Ann <a@x.com>", "Body": "about CTC"},
+            "b": {"Subject": "Lunch", "From": "b@x.com"},
+        })
         events = []
-        agent = CtcAgent(service, since_epoch=0, poll_interval=5,
+        agent = CtcAgent(service, 0, FakeClassifier(), poll_interval=5,
                          listener=lambda event, **d: events.append((event, d)))
 
         def fake_sleep(seconds):
-            if len(events) == 2:
+            if len(events) == 3:
                 msgs.list.return_value.execute.side_effect = RuntimeError("offline")
             else:
                 agent.stop()
@@ -127,25 +218,37 @@ class AgentTest(unittest.TestCase):
         agent._sleep = fake_sleep
         agent.run()
         self.assertEqual(events, [
-            ("acked", {"subject": "[CTC] one", "sender": "Ann <a@x.com>"}),
+            ("acked", {"subject": "Hi", "sender": "Ann <a@x.com>"}),
+            ("ignored", {"subject": "Lunch", "sender": "b@x.com", "reason": "not asking about CTC"}),
             ("checked", {"acked": 1}),
             ("error", {"error": "offline", "retry_in": 10}),
         ])
 
     def test_stop_skips_remaining_messages(self):
         service, msgs = fake_service({
-            "a": {"Subject": "[CTC] one", "From": "a@x.com"},
-            "b": {"Subject": "[CTC] two", "From": "b@x.com"},
+            "a": {"Subject": "one", "From": "a@x.com", "Body": "about CTC"},
+            "b": {"Subject": "two", "From": "b@x.com", "Body": "about CTC"},
         })
-        agent = CtcAgent(service, since_epoch=0, listener=lambda event, **d: agent.stop())
+        agent = CtcAgent(service, 0, FakeClassifier(), listener=lambda event, **d: agent.stop())
         self.assertEqual(agent.poll_once(), 1)
 
     def test_revoked_sign_in_stops_instead_of_retrying(self):
         service, msgs = fake_service({})
         msgs.list.return_value.execute.side_effect = RefreshError("invalid_grant")
-        agent = CtcAgent(service, since_epoch=0)
+        agent = CtcAgent(service, 0, FakeClassifier())
         agent._sleep = lambda s: self.fail("should not retry")
         with self.assertRaises(NeedsAuth):
+            agent.run()
+
+    def test_rejected_api_key_stops_instead_of_retrying(self):
+        service, msgs = fake_service({"a": {"Subject": "Hi", "From": "a@x.com"}})
+        classifier = MagicMock()
+        response = MagicMock(status_code=401, headers={})
+        classifier.wants_ctc_info.side_effect = anthropic.AuthenticationError(
+            "invalid x-api-key", response=response, body=None)
+        agent = CtcAgent(service, 0, classifier)
+        agent._sleep = lambda s: self.fail("should not retry")
+        with self.assertRaises(NeedsApiKey):
             agent.run()
 
 
