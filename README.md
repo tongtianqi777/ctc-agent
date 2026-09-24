@@ -190,6 +190,7 @@ from source or from `/Applications/CTC\ Agent.app/Contents/MacOS/ctc-agent`:
 | `app` | Open the app window (default for the packaged app) |
 | `run` | Watch the inbox in the terminal, without a window |
 | `auth` | Sign in to Gmail and save the token |
+| `set-api-key` | Save the Claude API key used to read emails |
 
 ### Where files live
 
