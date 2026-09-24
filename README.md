@@ -23,8 +23,9 @@
 helps CTC staff with the everyday administrative tasks of running it.
 
 The first feature is **automatic email replies**. CTC Agent is a Mac app that watches a Gmail
-inbox. When someone writes in to ask about CTC, it sends them a short, friendly reply (in
-English and Chinese) with a link to the website.
+inbox. When someone writes in to ask about CTC, it sends them a short, friendly reply with a
+link to the website, in the language they wrote in: Simplified Chinese, Traditional Chinese or
+English.
 
 ### 🗺️ Roadmap
 
@@ -74,7 +75,7 @@ email the agent decided not to answer.
 | 🆕 **Only new mail** | Emails received before the agent first started are ignored. Mail that arrives while the app is closed is handled the next time it's opened. |
 | 1️⃣ **Each email is checked once** | Every email the agent reads gets a hidden Gmail label `ctc-checked`, and every email it answers also gets the visible label `ctc-acked`. Labeled emails are skipped afterwards, so no email is sent to Claude or answered twice. |
 | 🔁 **No loops or intrusions** | Without asking Claude, the agent skips auto-replies, mailing lists, bulk mail, your own messages, and any thread you (or the agent) have already replied to. Its replies carry `Auto-Submitted: auto-replied`, so other auto-responders don't answer them. |
-| 🔒 **Fixed reply text** | Claude only decides *whether* to reply. The reply text is the fixed `REPLY_BODY` template in [`ctc_agent.py`](ctc_agent.py), so an email can't make the agent write anything else. The classifier prompt (`CLASSIFIER_PROMPT`) is in the same file. |
+| 🔒 **Fixed reply text** | Claude only decides *whether* to reply and which language to use. The reply text is one of the fixed `REPLY_BODIES` templates (Simplified Chinese, Traditional Chinese, English) in [`ctc_agent.py`](ctc_agent.py), so an email can't make the agent write anything else. Emails in other languages get the English reply. The classifier prompt (`CLASSIFIER_PROMPT`) is in the same file. |
 | 💰 **Low cost** | One short Claude Haiku request per new email (typically about $0.001, at most about $0.01). Emails longer than 8,000 characters are truncated first. |
 | 💪 **Resilient** | Polls every 30s and backs off exponentially (up to 10 min) on errors. If the Gmail sign-in expires or is revoked, the window says so and offers **Sign In** again. |
 

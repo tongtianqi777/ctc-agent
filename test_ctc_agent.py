@@ -52,14 +52,21 @@ def fake_service(messages, labels=(), answered_threads=()):
 
 
 class FakeClassifier:
-    """Says an email asks about CTC when its body contains "about CTC"."""
+    """Says an email asks about CTC when its body contains "about CTC" (or "CTC嗎"/"CTC吗").
+
+    Replies in Traditional Chinese for "嗎", Simplified Chinese for "吗", else English.
+    """
 
     def __init__(self):
         self.calls = []
 
-    def wants_ctc_info(self, sender, subject, body):
+    def reply_language(self, sender, subject, body):
         self.calls.append(subject)
-        return "about CTC" in body
+        if "CTC嗎" in body:
+            return "zh-Hant"
+        if "CTC吗" in body:
+            return "zh-Hans"
+        return "en" if "about CTC" in body else None
 
 
 def sent_emails(msgs):
@@ -115,6 +122,22 @@ class BuildReplyTest(unittest.TestCase):
         self.assertTrue(text.startswith("Hi Ann,"))
         self.assertIn("https://www.cedartc.org", text)
 
+    def test_replies_in_senders_chinese_script(self):
+        def text(language):
+            raw = build_reply({"subject": "詢問", "from": "王小明 <w@x.com>"}, "t", language)["raw"]
+            return email.message_from_bytes(base64.urlsafe_b64decode(raw),
+                                            policy=email.policy.default).get_content()
+
+        hant, hans = text("zh-Hant"), text("zh-Hans")
+        self.assertTrue(hant.startswith("王小明 您好："))
+        self.assertIn("感謝您對香柏木培訓中心", hant)
+        self.assertNotIn("感谢", hant)
+        self.assertIn("感谢您对香柏木培训中心", hans)
+        self.assertNotIn("感謝", hans)
+        self.assertNotIn("Thank you", hans + hant)
+        self.assertIn("https://www.cedartc.org", hans)
+        self.assertTrue(text("fr").startswith("Hi 王小明,"))  # unknown language falls back to English
+
     def test_prefers_reply_to(self):
         body = build_reply({"subject": "[CTC] hi", "from": "a@x.com", "reply-to": "list@x.com"}, "t")
         msg = email.message_from_bytes(base64.urlsafe_b64decode(body["raw"]))
@@ -149,6 +172,19 @@ class AgentTest(unittest.TestCase):
         self.assertEqual(created["ctc-checked"]["messageListVisibility"], "hide")
         self.assertEqual(created["ctc-acked"]["messageListVisibility"], "show")
 
+    def test_reply_matches_language_of_email(self):
+        service, msgs = fake_service({
+            "a": {"Subject": "詢問", "From": "a@x.com", "Body": "可以介紹一下CTC嗎？"},
+            "b": {"Subject": "询问", "From": "b@x.com", "Body": "可以介绍一下CTC吗？"},
+            "c": {"Subject": "Hi", "From": "c@x.com", "Body": "Tell me about CTC"},
+        })
+        self.assertEqual(CtcAgent(service, 0, FakeClassifier()).poll_once(), 3)
+        texts = {thread: sent.get_payload(decode=True).decode()
+                 for sent, thread in sent_emails(msgs)}
+        self.assertIn("感謝您", texts["t-a"])
+        self.assertIn("感谢您", texts["t-b"])
+        self.assertIn("Thank you", texts["t-c"])
+
     def test_skips_automated_mail_and_answered_threads_without_asking_claude(self):
         service, msgs = fake_service({
             "a": {"Subject": "News", "From": "n@x.com", "List-Id": "<news.x.com>",
@@ -180,7 +216,7 @@ class AgentTest(unittest.TestCase):
     def test_classifier_failure_leaves_message_for_next_poll(self):
         service, msgs = fake_service({"a": {"Subject": "Hi", "From": "a@x.com"}})
         classifier = MagicMock()
-        classifier.wants_ctc_info.side_effect = RuntimeError("overloaded")
+        classifier.reply_language.side_effect = RuntimeError("overloaded")
         with self.assertRaises(RuntimeError):
             CtcAgent(service, 0, classifier).poll_once()
         msgs.modify.assert_not_called()
@@ -244,7 +280,7 @@ class AgentTest(unittest.TestCase):
         service, msgs = fake_service({"a": {"Subject": "Hi", "From": "a@x.com"}})
         classifier = MagicMock()
         response = MagicMock(status_code=401, headers={})
-        classifier.wants_ctc_info.side_effect = anthropic.AuthenticationError(
+        classifier.reply_language.side_effect = anthropic.AuthenticationError(
             "invalid x-api-key", response=response, body=None)
         agent = CtcAgent(service, 0, classifier)
         agent._sleep = lambda s: self.fail("should not retry")
