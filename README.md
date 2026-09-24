@@ -2,7 +2,7 @@
 
 # 🌲 CTC Agent
 
-**An AI assistant for the staff of [CTC](https://www.cedartc.org/0/1/), an online Christian training platform**
+**An AI assistant for the staff of [Cedar Training Center (CTC)](https://www.cedartc.org/0/1/), an online Christian training platform**
 
 *Takes routine work off the staff's plate so they have more time for students.*
 
@@ -17,7 +17,7 @@
 
 ## 📖 About
 
-[CTC](https://www.cedartc.org/0/1/) is an online Christian training platform. **CTC Agent**
+[Cedar Training Center (CTC)](https://www.cedartc.org/0/1/) is an online Christian training platform. **CTC Agent**
 helps CTC staff with the everyday administrative tasks of running it.
 
 The first feature is **automatic email replies**. CTC Agent is a Mac app that watches a Gmail
