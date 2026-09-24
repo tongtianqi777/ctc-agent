@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400" width="400" height="400" role="img" aria-labelledby="title">
+  <title id="title">Cedar tree</title>
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#F3F9F4"/>
+      <stop offset="1" stop-color="#D5EBDB"/>
+    </linearGradient>
+    <linearGradient id="leaf" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#4FAF74"/>
+      <stop offset="1" stop-color="#1E6B43"/>
+    </linearGradient>
+    <linearGradient id="leafDark" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2F8A57"/>
+      <stop offset="1" stop-color="#154D30"/>
+    </linearGradient>
+    <linearGradient id="bark" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#8A5A3B"/>
+      <stop offset="1" stop-color="#5E3A24"/>
+    </linearGradient>
+    <clipPath id="disc"><circle cx="200" cy="200" r="190"/></clipPath>
+  </defs>
+
+  <circle cx="200" cy="200" r="190" fill="url(#sky)"/>
+  <g clip-path="url(#disc)">
+    <circle cx="300" cy="105" r="26" fill="#FFE7A8" opacity="0.9"/>
+    <ellipse cx="200" cy="395" rx="260" ry="70" fill="#9FD1AE"/>
+    <ellipse cx="200" cy="410" rx="230" ry="60" fill="#7FBF93"/>
+  </g>
+
+  <!-- trunk and branches -->
+  <path d="M189 356 C193 300 195 230 198 96 L202 96 C205 230 207 300 211 356 Z" fill="url(#bark)"/>
+  <g stroke="#6E4630" stroke-linecap="round" fill="none">
+    <path d="M200 292 C176 286 140 286 104 290" stroke-width="6"/>
+    <path d="M201 234 C224 228 262 228 296 232" stroke-width="5"/>
+    <path d="M200 180 C182 174 156 174 130 177" stroke-width="4"/>
+    <path d="M201 132 C216 127 238 127 258 130" stroke-width="3"/>
+  </g>
+
+  <!-- flat, spreading tiers like a cedar of Lebanon -->
+  <g>
+    <path d="M58.0 300 C60.0 278.0 86.32 268.0 119.36 271.2 C138.24 258.0 194.88 256.0 213.76000000000002 268.0 C246.8 262.0 292.0 276.0 294.0 300 Z" fill="url(#leafDark)"/>
+    <path d="M72.16 295.2 C74.16 278.0 97.0816 268.0 126.1568 270.4 C142.77120000000002 258.0 192.6144 256.8 209.2288 267.2 C238.304 262.0 277.84000000000003 276.0 279.84000000000003 295.2 Z" fill="url(#leaf)" opacity="0.6"/>
+    <path d="M130.0 242 C132.0 222.2 153.52 213.2 180.96 216.08 C196.64 204.2 243.68 202.4 259.36 213.2 C286.8 207.8 324.0 220.4 326.0 242 Z" fill="url(#leafDark)"/>
+    <path d="M141.76 237.68 C143.76 222.2 162.45759999999999 213.2 186.60479999999998 215.36 C200.4032 204.2 241.79839999999996 203.12 255.59679999999997 212.48 C279.744 207.8 312.24 220.4 314.24 237.68 Z" fill="url(#leaf)" opacity="0.6"/>
+    <path d="M90.0 188 C92.0 170.4 109.2 162.4 131.6 164.96 C144.4 154.4 182.8 152.8 195.60000000000002 162.4 C218.0 157.6 248.0 168.8 250.0 188 Z" fill="url(#leafDark)"/>
+    <path d="M99.6 184.16 C101.6 170.4 116.496 162.4 136.208 164.32 C147.472 154.4 181.264 153.44 192.52800000000002 161.76 C212.24 157.6 238.4 168.8 240.4 184.16 Z" fill="url(#leaf)" opacity="0.6"/>
+    <path d="M162.0 138 C164.0 122.6 176.4 115.6 193.2 117.84 C202.8 108.6 231.6 107.19999999999999 241.2 115.6 C258.0 111.4 280.0 121.2 282.0 138 Z" fill="url(#leafDark)"/>
+    <path d="M169.2 134.64 C171.2 122.6 181.87199999999999 115.6 196.65599999999998 117.28 C205.10399999999998 108.6 230.44799999999998 107.75999999999999 238.896 115.04 C253.68 111.4 272.79999999999995 121.2 274.79999999999995 134.64 Z" fill="url(#leaf)" opacity="0.6"/>
+    <path d="M162.0 98 C164.0 84.8 170.64 78.8 180.72 80.72 C186.48 72.8 203.76 71.6 209.52 78.8 C219.6 75.2 232.0 83.6 234.0 98 Z" fill="url(#leafDark)"/>
+    <path d="M166.32 95.12 C168.32 84.8 173.92319999999998 78.8 182.7936 80.24000000000001 C187.86239999999998 72.8 203.06879999999998 72.08 208.1376 78.32 C217.00799999999998 75.2 227.68 83.6 229.68 95.12 Z" fill="url(#leaf)" opacity="0.6"/>
+  </g>
+
+  <circle cx="200" cy="200" r="190" fill="none" stroke="#1E6B43" stroke-opacity="0.15" stroke-width="4"/>
+</svg>

@@ -1,6 +1,8 @@
 <div align="center">
 
-# 🌲 CTC Agent
+<img src="assets/cedar.svg" alt="A cedar tree" width="160">
+
+# CTC Agent
 
 **An AI assistant for the staff of [Cedar Training Center (CTC)](https://www.cedartc.org/0/1/), an online Christian training platform**
 
